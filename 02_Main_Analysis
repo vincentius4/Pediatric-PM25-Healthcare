@@ -1,0 +1,70 @@
+/* =========================================================================
+   Project: Impact of PM2.5 on Pediatric Respiratory Healthcare Utilization
+   Script: 02_Main_Analysis.do
+   Description: 2SLS (IV) Panel Fixed-Effects Regression 
+                Main Analysis split by Pre-COVID (15-19) and COVID Era (20-23)
+   Core Methodology: Temperature Inversion (TI) as an IV for PM2.5 (mpm25)
+========================================================================= */
+
+clear all
+set more off
+capture log close
+
+cd "/userdata01/room022/data_out/2010_2023_ALL/"
+
+/* -------------------------------------------------------------------------
+   Step 1: Data Preparation & Panel Setup
+------------------------------------------------------------------------- */
+use "respiratory_2015_2023.dta", clear
+
+bysort indi_dscm_no (DATE): gen byte first = (_n==1)
+gen panelid = sum(first)
+drop first indi_dscm_no
+
+gen year2 = substr(DATE, 1, 4)
+gen month22 = substr(DATE, 5, 2)
+gen ym = real(year2)*100 + real(month22)
+gen year_num = real(year2)
+drop DATE
+
+gen lntot = ln(rtot + 1)
+gen lninc = ln(rcalc + 1)
+gen lninc2 = lninc^2
+
+xtset panelid ym
+
+/* -------------------------------------------------------------------------
+   Step 2: Instrumental Variable (IV) Fixed-Effects Regression
+------------------------------------------------------------------------- */
+local periods `" "2015 2019" "2020 2023" "'
+local dep_vars "lntot COUNT_A"
+local age_min 0  3  0  6  0 12 24 36 48 60 72 84
+local age_max 2 11  5 11 11 23 35 47 59 71 83 95
+local n_groups : word count `age_min'
+
+foreach p of local periods {
+    local min_yr = word("`p'", 1)
+    local max_yr = word("`p'", 2)
+    
+    foreach y in `dep_vars' {
+        forvalues i = 1/`n_groups' {
+            local min = word("`age_min'", `i')
+            local max = word("`age_max'", `i')
+            
+            log using "iv_`y'_`min_yr'_`max_yr'_`min'_`max'.txt", text replace
+            
+            display "========================================================="
+            display "MAIN ANALYSIS | Period: `min_yr' to `max_yr'"
+            display "Dependent Variable: `y'"
+            display "Age Group: `min' to `max' months"
+            display "========================================================="
+            
+            xi: xtivreg2 `y' lninc lninc2 mrain i.year2 i.month22 job2-job5 dsb ///
+                (mpm25 = TI_mean_zero) ///
+                if diff_bth >= `min' & diff_bth <= `max' & year_num >= `min_yr' & year_num <= `max_yr', ///
+                fe first cluster(ID_SGG)
+                
+            log close
+        }
+    }
+}
