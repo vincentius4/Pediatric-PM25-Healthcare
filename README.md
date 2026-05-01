@@ -17,3 +17,5 @@ However, to ensure full transparency and reproducibility, we provide the complet
 # System Requirements
 * Data Preparation: SAS 9.4 or higher
 * Statistical Analysis: Stata 16.0 or higher (requires `xtivreg2` package)
+
+https://doi.org/10.5281/zenodo.19953320
