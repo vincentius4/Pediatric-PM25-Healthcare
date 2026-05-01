@@ -1,4 +1,3 @@
-# Pediatric-PM25-Healthcare
 # Impact of PM2.5 on Pediatric Respiratory Healthcare Utilization
 
 This repository contains the data preparation and statistical analysis codes used in the study: 
