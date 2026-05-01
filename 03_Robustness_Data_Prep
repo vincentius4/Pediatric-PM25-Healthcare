@@ -1,0 +1,124 @@
+/* =========================================================================
+   Project: Impact of PM2.5 on Pediatric Respiratory Healthcare Utilization
+   Script: 03_Robustness_Data_Prep.sas
+   Description: Data preparation for Falsification Test (Negative Control).
+                Extracts narrow-range surgery (S10-S99) and burns (T00-T14).
+   Output: surge_burn_2015_2023_narrow.dta
+   Note: Raw NHIS data can only be accessed offline at NHIS Big Data Centers.
+========================================================================= */
+
+/* (Assuming Step 1 and Step 2 from 01_Data_Preparation.sas have already 
+   been executed to create the D_OUT.BASE_CLAIMS, D_OUT.CHECKUP_CLEANED, 
+   and D_OUT.ENV_CLEAN datasets) */
+
+/* -------------------------------------------------------------------------
+   Step 3: Extracting Negative Control Cases (Surgery & Burns)
+------------------------------------------------------------------------- */
+DATA D_OUT.SURGE_BURN_CASES;
+    SET D_OUT.BASE_CLAIMS;
+    
+    DISEASE_1 = SUBSTR(SICK_SYM1, 1, 3);
+    DISEASE_2 = SUBSTR(SICK_SYM2, 1, 3);
+    
+    IS_SURGE = (('S10' <= DISEASE_1 <= 'S99') OR ('S10' <= DISEASE_2 <= 'S99'));
+    IS_BURN  = (('T00' <= DISEASE_1 <= 'T14') OR ('T00' <= DISEASE_2 <= 'T14'));
+    IF IS_SURGE OR IS_BURN;
+    COUNT_UNIQ = 1;
+RUN;
+
+PROC SQL;
+    CREATE TABLE D_OUT.SURGE_MONTHLY AS
+    SELECT INDI_DSCM_NO, DATE, ID_SGG2 AS ID_SGG, BIRTH_YYYYMM, SEX_TYPE, GAIBJA_TYPE, CALC_CTRB_FD, CMPR_DSB_GRADE, INDTP_CD,
+           SUM(ED_RC_TOT_AMT) AS TOT, SUM(EDC_SBA) AS SELF, SUM(EDC_INSUR_BRDN_AMT) AS INSUR, SUM(COUNT_UNIQ) AS COUNT_A
+    FROM D_OUT.SURGE_BURN_CASES
+    GROUP BY INDI_DSCM_NO, DATE, ID_SGG2, BIRTH_YYYYMM, SEX_TYPE, GAIBJA_TYPE, CALC_CTRB_FD, CMPR_DSB_GRADE, INDTP_CD;
+QUIT;
+
+/* -------------------------------------------------------------------------
+   Step 4: Create Balanced Panel & Merge Data
+------------------------------------------------------------------------- */
+PROC SQL;
+    CREATE TABLE D_OUT.ALL_COMB_SURGE AS 
+    SELECT A.INDI_DSCM_NO, B.DATE
+    FROM (SELECT DISTINCT INDI_DSCM_NO FROM D_OUT.SURGE_MONTHLY) AS A
+    CROSS JOIN (SELECT DISTINCT DATE FROM D_OUT.SURGE_MONTHLY) AS B;
+QUIT;
+
+PROC SQL;
+    CREATE TABLE D_OUT.PANEL_SURGE_FILLED AS 
+    SELECT A.INDI_DSCM_NO, A.DATE, B.*
+    FROM D_OUT.ALL_COMB_SURGE AS A
+    LEFT JOIN D_OUT.SURGE_MONTHLY AS B ON A.INDI_DSCM_NO = B.INDI_DSCM_NO AND A.DATE = B.DATE;
+QUIT;
+
+DATA D_OUT.PANEL_SURGE_CLEAN;
+    SET D_OUT.PANEL_SURGE_FILLED;
+    IF COUNT_A = . THEN COUNT_A = 0;
+    IF TOT = . THEN TOT = 0;
+    YEARLY = SUBSTR(DATE, 1, 4);
+RUN;
+
+PROC SQL;
+    CREATE TABLE D_OUT.SURGE_FINAL_MERGE AS
+    SELECT A.*, B.BTH_WGHT, B.PREM, C.MPM10, C.MPM25, C.high_pm25, C.TI_MEAN_ZERO, C.MRAIN
+    FROM D_OUT.PANEL_SURGE_CLEAN AS A
+    LEFT JOIN D_OUT.CHECKUP_CLEANED AS B ON A.INDI_DSCM_NO = B.INDI_DSCM_NO
+    INNER JOIN D_OUT.ENV_CLEAN AS C ON A.ID_SGG = C.ID_SGG AND A.DATE = C.DATE;
+QUIT;
+
+/* -------------------------------------------------------------------------
+   Step 5: Final Trimming
+------------------------------------------------------------------------- */
+PROC SQL;
+    CREATE TABLE D_OUT.SURGE AS
+    SELECT * FROM D_OUT.SURGE_FINAL_MERGE
+    WHERE INDI_DSCM_NO NOT IN (
+        SELECT INDI_DSCM_NO FROM D_OUT.SURGE_FINAL_MERGE GROUP BY INDI_DSCM_NO HAVING COUNT(DISTINCT ID_SGG) > 1
+    );
+QUIT;
+
+DATA D_OUT.FINAL_SURGE_READY;
+    SET D_OUT.SURGE;
+    
+    IF GAIBJA_TYPE = 6 OR GAIBJA_TYPE = "";
+    IF YEARLY >= "2015";
+    
+    DIFF_BTH = INTCK('MONTH', INPUT(BIRTH_YYYYMM, YYMMN6.), INPUT(DATE, YYMMN6.));
+    IF 0 <= DIFF_BTH <= 95; 
+    
+    INDTP = SUBSTR(INDTP_CD, 1, 2);
+    JOB1 = (INDTP IN ("01", "02", "03"));
+    JOB2 = (INDTP IN ("04", "05", "06"));
+    JOB3 = (INDTP IN ("07", "08", "09"));
+    JOB4 = ("09" < INDTP < "98");
+    JOB5 = ("98" < INDTP OR INDTP = .);
+    DSB = (CMPR_DSB_GRADE ~= .);
+    SEX = (SEX_TYPE = "1");
+    
+    SELECT (YEARLY);
+        WHEN ("2015") RATIO = 94.861;
+        WHEN ("2016") RATIO = 95.783;
+        WHEN ("2017") RATIO = 97.645;
+        WHEN ("2018") RATIO = 99.086;
+        WHEN ("2019") RATIO = 99.466;
+        WHEN ("2020") RATIO = 100.0;
+        WHEN ("2021") RATIO = 102.50;
+        WHEN ("2022") RATIO = 107.7;
+        WHEN ("2023") RATIO = 111.6;
+    END;
+    
+    RCALC = (CALC_CTRB_FD / RATIO) * 100;
+    RTOT = (TOT / RATIO) * 100;
+
+    IF CALC_CTRB_FD = . THEN DELETE;
+    IF TOT = . THEN DELETE;
+
+    KEEP INDI_DSCM_NO DATE ID_SGG DIFF_BTH TOT RTOT CALC_CTRB_FD RCALC 
+         COUNT_A DSB JOB1 JOB2 JOB3 JOB4 JOB5 SEX BTH_WGHT PREM MPM10 MPM25 high_pm25 TI_MEAN_ZERO MRAIN;
+RUN;
+
+/* Export to Stata */
+PROC EXPORT DATA=D_OUT.FINAL_SURGE_READY
+    OUTFILE="/userdata01/room022/data_out/2010_2023_ALL/surge_burn_2015_2023_narrow.dta"
+    DBMS=STATA REPLACE;
+RUN;
