@@ -1,0 +1,142 @@
+/* =========================================================================
+   Project: Impact of PM2.5 on Pediatric Healthcare Utilization
+   Script: 04_Robustness_Analysis.do
+   Description: Robustness Checks & Falsification Tests (Baseline: 2015-2019)
+                1) High PM2.5 Exposure Only (Instrument: high_pm25)
+                2) Subgroup by Gender (Boys vs Girls)
+                3) Falsification Test (Surgery & Burns)
+========================================================================= */
+
+clear all
+set more off
+
+cd "/userdata01/room022/data_out/2010_2023_ALL/"
+
+local dep_vars "lntot COUNT_A"
+local age_min 0  3  0  6  0 12 24 36 48 60 72 84
+local age_max 2 11  5 11 11 23 35 47 59 71 83 95
+local n_groups : word count `age_min'
+
+
+/* -------------------------------------------------------------------------
+   PART A: ROBUSTNESS CHECKS ON MAIN DATA (respiratory_2015_2023.dta)
+------------------------------------------------------------------------- */
+use "respiratory_2015_2023.dta", clear
+
+// Data Setup
+bysort indi_dscm_no (DATE): gen byte first = (_n==1)
+gen panelid = sum(first)
+drop first indi_dscm_no
+
+gen year2 = substr(DATE, 1, 4)
+gen month22 = substr(DATE, 5, 2)
+gen ym = real(year2)*100 + real(month22)
+gen year_num = real(year2)
+
+gen lntot = ln(rtot + 1)
+gen lninc = ln(rcalc + 1)
+gen lninc2 = lninc^2
+
+xtset panelid ym
+
+// ONLY focus on the 2015-2019 baseline period
+keep if year_num >= 2015 & year_num <= 2019
+
+
+// TEST 1: High PM2.5 Exposure Only (Instrument: high_pm25)
+foreach y in `dep_vars' {
+    forvalues i = 1/`n_groups' {
+        local min = word("`age_min'", `i')
+        local max = word("`age_max'", `i')
+        
+        capture log close
+        log using "robust_highpm_`y'_2015_2019_`min'_`max'.txt", text replace
+        display "TEST 1: HIGH PM2.5 (high_pm25) | 2015-2019 | `y' | Age: `min'-`max'"
+        
+        xi: xtivreg2 `y' lninc lninc2 mrain i.year2 i.month22 job2-job5 dsb ///
+            (high_pm25 = TI_mean_zero) ///
+            if diff_bth >= `min' & diff_bth <= `max', ///
+            fe first cluster(ID_SGG)
+            
+        log close
+    }
+}
+
+// TEST 2: Gender Subgroups (Boys & Girls)
+local genders `" "1 boys" "0 girls" "'
+
+foreach g of local genders {
+    local sex_val = word("`g'", 1)
+    local sex_name = word("`g'", 2)
+    
+    foreach y in `dep_vars' {
+        forvalues i = 1/`n_groups' {
+            local min = word("`age_min'", `i')
+            local max = word("`age_max'", `i')
+            
+            capture log close
+            log using "robust_`sex_name'_`y'_2015_2019_`min'_`max'.txt", text replace
+            display "TEST 2: GENDER (`sex_name') | 2015-2019 | `y' | Age: `min'-`max'"
+            
+            xi: xtivreg2 `y' lninc lninc2 mrain i.year2 i.month22 job2-job5 dsb ///
+                (mpm25 = TI_mean_zero) ///
+                if diff_bth >= `min' & diff_bth <= `max' & SEX == `sex_val', ///
+                fe first cluster(ID_SGG)
+                
+            log close
+        }
+    }
+}
+
+
+/* -------------------------------------------------------------------------
+   PART B: FALSIFICATION TEST ON NEGATIVE CONTROL DATA (surge_burn_...dta)
+------------------------------------------------------------------------- */
+clear all
+use "surge_burn_2015_2023_narrow.dta", clear
+
+drop if mpm25 == . 
+drop if TI_mean_zero == .
+
+// Data Setup
+bysort indi_dscm_no (DATE): gen byte first = (_n==1)
+gen panelid = sum(first)
+drop first indi_dscm_no
+
+gen year2 = substr(DATE, 1, 4)
+gen month22 = substr(DATE, 5, 2)
+gen ym = real(year2)*100 + real(month22)
+gen year_num = real(year2)
+
+gen lntot = ln(rtot + 1)
+gen lninc = ln(rcalc + 1)
+gen lninc2 = lninc^2
+
+xtset panelid ym
+
+// ONLY focus on the 2015-2019 baseline period
+keep if year_num >= 2015 & year_num <= 2019
+
+
+// TEST 3: Falsification Test (Surgery & Burns)
+foreach y in `dep_vars' {
+    forvalues i = 1/`n_groups' {
+        local min = word("`age_min'", `i')
+        local max = word("`age_max'", `i')
+        
+        capture log close
+        log using "falsification_surge_`y'_2015_2019_`min'_`max'.txt", text replace
+        display "TEST 3: FALSIFICATION (SURGE/BURN) | 2015-2019 | `y' | Age: `min'-`max'"
+        
+        xi: xtivreg2 `y' lninc lninc2 mrain i.year2 i.month22 job2-job5 dsb ///
+            (mpm25 = TI_mean_zero) ///
+            if diff_bth >= `min' & diff_bth <= `max', ///
+            fe first cluster(ID_SGG)
+            
+        log close
+    }
+}
+
+/* =========================================================================
+   End of Script
+========================================================================= */
